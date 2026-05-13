@@ -1,0 +1,15 @@
+{
+  "name": "connectx-chat",
+  "version": "1.0.0",
+  "description": "ConnectX - Full Stack Real-time Chat App",
+  "scripts": {
+    "install:all": "cd server && npm install && cd ../client && npm install && cd ../mobile && npm install",
+    "dev:server": "cd server && npm run dev",
+    "dev:client": "cd client && npm start",
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "build:client": "cd client && npm run build"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
