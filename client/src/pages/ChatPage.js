@@ -5,6 +5,7 @@ import { format, isToday, isYesterday } from "date-fns";
 import { useAuth } from "../context/AuthContext";
 import { useSocket } from "../context/SocketContext";
 import api from "../services/api";
+import toast from "react-hot-toast";
 
 const formatTime = (date) => format(new Date(date), "h:mm a");
 const formatDate = (date) => {
@@ -35,15 +36,19 @@ export default function ChatPage() {
   const [selectedMsg, setSelectedMsg] = useState(null);
   const [showAttach, setShowAttach] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [showCallModal, setShowCallModal] = useState(null);
+  const [callDuration, setCallDuration] = useState(0);
+  const [callActive, setCallActive] = useState(false);
 
   const messagesEndRef = useRef(null);
   const typingTimeout = useRef(null);
   const inputRef = useRef(null);
   const fileRef = useRef(null);
+  const callTimer = useRef(null);
 
   const scrollToBottom = () => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
 
-  // Helper to get sender ID safely
   const getSenderId = (msg) => {
     if (!msg.sender) return "";
     if (typeof msg.sender === "string") return msg.sender;
@@ -80,12 +85,8 @@ export default function ChatPage() {
         }
       }
     });
-    const offTyping = on("typing", ({ userId: tid }) => {
-      if (tid === userId) setIsTyping(true);
-    });
-    const offStop = on("stop_typing", ({ userId: tid }) => {
-      if (tid === userId) setIsTyping(false);
-    });
+    const offTyping = on("typing", ({ userId: tid }) => { if (tid === userId) setIsTyping(true); });
+    const offStop = on("stop_typing", ({ userId: tid }) => { if (tid === userId) setIsTyping(false); });
     const offSeen = on("message_seen", ({ messageId }) => {
       setMessages(p => p.map(m =>
         m._id === messageId ? { ...m, seenBy: [...(m.seenBy || []), userId] } : m
@@ -159,6 +160,49 @@ export default function ChatPage() {
     } catch(e) {}
   };
 
+  const handleBlock = async () => {
+    if (!window.confirm("Block " + contact?.name + "?")) return;
+    try {
+      await api.post("/users/block/" + userId);
+      toast.success("User blocked!");
+      navigate("/home");
+    } catch(e) { toast.error("Failed to block user"); }
+  };
+
+  const handleClearChat = () => {
+    if (!window.confirm("Clear all messages? This cannot be undone.")) return;
+    setMessages([]);
+    toast.success("Chat cleared!");
+  };
+
+  const startCall = (type) => {
+    setShowCallModal(type);
+    setCallDuration(0);
+    setCallActive(false);
+    setTimeout(() => {
+      setCallActive(true);
+      callTimer.current = setInterval(() => {
+        setCallDuration(p => p + 1);
+      }, 1000);
+    }, 3000);
+    emit("call_user", { receiverId: userId, callType: type });
+  };
+
+  const endCall = () => {
+    clearInterval(callTimer.current);
+    setShowCallModal(null);
+    setCallActive(false);
+    setCallDuration(0);
+    emit("call_ended", { receiverId: userId });
+    toast.success("Call ended");
+  };
+
+  const formatCallTime = (secs) => {
+    const m = Math.floor(secs / 60).toString().padStart(2, "0");
+    const s = (secs % 60).toString().padStart(2, "0");
+    return m + ":" + s;
+  };
+
   const grouped = messages.reduce((acc, msg) => {
     const date = formatDate(msg.createdAt);
     if (!acc[date]) acc[date] = [];
@@ -169,7 +213,10 @@ export default function ChatPage() {
   const isOnline = onlineUsers.has(userId) || contact?.isOnline;
 
   return (
-    <div className="flex h-screen bg-[#0f0e17] overflow-hidden flex-col">
+    <div
+      className="flex h-screen bg-[#0f0e17] overflow-hidden flex-col"
+      onClick={() => { setShowMoreMenu(false); setSelectedMsg(null); setShowEmoji(false); setShowAttach(false); }}
+    >
       {/* HEADER */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-white/5 bg-[#16213e]/80 backdrop-blur">
         <button onClick={() => navigate("/home")} className="text-slate-400 hover:text-white transition text-xl w-8">←</button>
@@ -189,10 +236,65 @@ export default function ChatPage() {
               : isOnline ? <span className="text-green-400">Online</span> : "Offline"}
           </p>
         </div>
-        <div className="flex gap-2">
-          <button className="w-9 h-9 glass rounded-xl flex items-center justify-center text-slate-400 hover:text-green-400 transition">📞</button>
-          <button className="w-9 h-9 glass rounded-xl flex items-center justify-center text-slate-400 hover:text-cyan-400 transition">📹</button>
-          <button className="w-9 h-9 glass rounded-xl flex items-center justify-center text-slate-400 hover:text-white transition">⋮</button>
+
+        {/* ── 3 ACTION BUTTONS ── */}
+        <div className="flex gap-2 relative">
+          {/* Voice Call Button */}
+          <button
+            onClick={(e) => { e.stopPropagation(); startCall("voice"); }}
+            className="w-9 h-9 glass rounded-xl flex items-center justify-center text-slate-400 hover:text-green-400 hover:bg-green-400/10 transition"
+            title="Voice Call"
+          >
+            📞
+          </button>
+
+          {/* Video Call Button */}
+          <button
+            onClick={(e) => { e.stopPropagation(); startCall("video"); }}
+            className="w-9 h-9 glass rounded-xl flex items-center justify-center text-slate-400 hover:text-cyan-400 hover:bg-cyan-400/10 transition"
+            title="Video Call"
+          >
+            📹
+          </button>
+
+          {/* More Options Button */}
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowMoreMenu(p => !p); }}
+            className={"w-9 h-9 rounded-xl flex items-center justify-center transition " + (showMoreMenu ? "bg-purple-600 text-white" : "glass text-slate-400 hover:text-white")}
+            title="More Options"
+          >
+            ⋮
+          </button>
+
+          {/* More Options Dropdown Menu */}
+          <AnimatePresence>
+            {showMoreMenu && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9, y: -10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9, y: -10 }}
+                className="absolute right-0 top-11 z-50 w-52 bg-[#16213e] rounded-2xl overflow-hidden shadow-2xl border border-white/10"
+                onClick={e => e.stopPropagation()}
+              >
+                {[
+                  { icon: "👤", label: "View Profile", color: "text-purple-400", onClick: () => { navigate("/profile"); setShowMoreMenu(false); } },
+                  { icon: "📋", label: "Copy Username", color: "text-blue-400", onClick: () => { navigator.clipboard.writeText("@" + (contact?.username || "")); toast.success("Username copied!"); setShowMoreMenu(false); } },
+                  { icon: "🔇", label: "Mute Notifications", color: "text-yellow-400", onClick: () => { toast.success("Notifications muted!"); setShowMoreMenu(false); } },
+                  { icon: "🗑️", label: "Clear Chat", color: "text-orange-400", onClick: () => { handleClearChat(); setShowMoreMenu(false); } },
+                  { icon: "🚫", label: "Block User", color: "text-red-400", onClick: () => { handleBlock(); setShowMoreMenu(false); } },
+                ].map((item, i) => (
+                  <button
+                    key={i}
+                    onClick={item.onClick}
+                    className="flex items-center gap-3 w-full px-4 py-3 hover:bg-white/5 transition border-b border-white/5 last:border-0"
+                  >
+                    <span className="text-lg">{item.icon}</span>
+                    <span className={"text-sm font-medium " + item.color}>{item.label}</span>
+                  </button>
+                ))}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </div>
 
@@ -200,7 +302,6 @@ export default function ChatPage() {
       <div
         className="flex-1 overflow-y-auto px-4 py-4"
         style={{ background: "radial-gradient(ellipse at center, #1e1b4b10 0%, #0f0e17 100%)" }}
-        onClick={() => { setSelectedMsg(null); setShowEmoji(false); setShowAttach(false); }}
       >
         {loading && (
           <div className="flex justify-center py-20">
@@ -225,7 +326,6 @@ export default function ChatPage() {
                   animate={{ opacity: 1, y: 0 }}
                   className={"flex mb-2 " + (isMine ? "justify-end" : "justify-start")}
                 >
-                  {/* Avatar for received messages */}
                   {!isMine && (
                     <div className="w-7 h-7 rounded-full bg-gradient-to-br from-purple-500 to-cyan-500 flex items-center justify-center text-white text-xs font-bold mr-2 flex-shrink-0 mt-1 overflow-hidden">
                       {contact?.avatar
@@ -235,7 +335,6 @@ export default function ChatPage() {
                   )}
 
                   <div className="max-w-xs md:max-w-md lg:max-w-lg relative group">
-                    {/* Reply preview */}
                     {msg.replyTo && (
                       <div className={"text-xs mb-1 px-3 py-2 rounded-lg border-l-2 border-purple-500 " + (isMine ? "bg-purple-900/30" : "bg-white/5")}>
                         <p className="text-purple-400 font-medium text-xs">↩ Reply</p>
@@ -243,7 +342,6 @@ export default function ChatPage() {
                       </div>
                     )}
 
-                    {/* Message bubble */}
                     <div
                       onClick={(e) => { e.stopPropagation(); setSelectedMsg(selectedMsg === msg._id ? null : msg._id); }}
                       className={"px-4 py-2.5 rounded-2xl text-sm leading-relaxed cursor-pointer " + (
@@ -267,8 +365,6 @@ export default function ChatPage() {
                       ) : (
                         <p className="whitespace-pre-wrap break-words">{msg.content}</p>
                       )}
-
-                      {/* Time and ticks */}
                       <div className={"flex items-center gap-1 mt-1 " + (isMine ? "justify-end" : "justify-start")}>
                         <span className="text-xs opacity-50">{formatTime(msg.createdAt)}</span>
                         {isMine && (
@@ -279,14 +375,10 @@ export default function ChatPage() {
                       </div>
                     </div>
 
-                    {/* Reactions */}
                     {msg.reactions?.length > 0 && (
                       <div className={"flex gap-1 mt-1 flex-wrap " + (isMine ? "justify-end" : "justify-start")}>
                         {Object.entries(
-                          msg.reactions.reduce((acc, r) => {
-                            acc[r.emoji] = (acc[r.emoji] || 0) + 1;
-                            return acc;
-                          }, {})
+                          msg.reactions.reduce((acc, r) => { acc[r.emoji] = (acc[r.emoji] || 0) + 1; return acc; }, {})
                         ).map(([emoji, count]) => (
                           <span key={emoji}
                             className="text-xs glass px-2 py-0.5 rounded-full cursor-pointer hover:bg-white/10"
@@ -297,30 +389,19 @@ export default function ChatPage() {
                       </div>
                     )}
 
-                    {/* Hover actions */}
                     {!isDeleted && (
                       <div className={"absolute top-0 flex gap-1 opacity-0 group-hover:opacity-100 transition " + (isMine ? "-left-20" : "-right-20")}>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); setShowReaction(showReaction === msg._id ? null : msg._id); }}
-                          className="w-7 h-7 glass rounded-full flex items-center justify-center text-xs hover:bg-white/10">
-                          😊
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); setReplyTo(msg); inputRef.current?.focus(); }}
-                          className="w-7 h-7 glass rounded-full flex items-center justify-center text-xs hover:bg-white/10">
-                          ↩
-                        </button>
+                        <button onClick={(e) => { e.stopPropagation(); setShowReaction(showReaction === msg._id ? null : msg._id); }}
+                          className="w-7 h-7 glass rounded-full flex items-center justify-center text-xs hover:bg-white/10">😊</button>
+                        <button onClick={(e) => { e.stopPropagation(); setReplyTo(msg); inputRef.current?.focus(); }}
+                          className="w-7 h-7 glass rounded-full flex items-center justify-center text-xs hover:bg-white/10">↩</button>
                         {isMine && (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); deleteMessage(msg._id); }}
-                            className="w-7 h-7 glass rounded-full flex items-center justify-center text-xs hover:bg-red-500/20 text-red-400">
-                            🗑
-                          </button>
+                          <button onClick={(e) => { e.stopPropagation(); deleteMessage(msg._id); }}
+                            className="w-7 h-7 glass rounded-full flex items-center justify-center text-xs hover:bg-red-500/20 text-red-400">🗑</button>
                         )}
                       </div>
                     )}
 
-                    {/* Reaction picker */}
                     {showReaction === msg._id && (
                       <motion.div
                         initial={{ opacity: 0, scale: 0.8 }}
@@ -330,15 +411,12 @@ export default function ChatPage() {
                       >
                         {EMOJIS.map(emoji => (
                           <button key={emoji} onClick={() => reactToMessage(msg._id, emoji)}
-                            className="text-lg hover:scale-125 transition">
-                            {emoji}
-                          </button>
+                            className="text-lg hover:scale-125 transition">{emoji}</button>
                         ))}
                       </motion.div>
                     )}
                   </div>
 
-                  {/* Avatar for sent messages */}
                   {isMine && (
                     <div className="w-7 h-7 rounded-full bg-gradient-to-br from-purple-600 to-purple-800 flex items-center justify-center text-white text-xs font-bold ml-2 flex-shrink-0 mt-1 overflow-hidden">
                       {user?.avatar
@@ -352,13 +430,10 @@ export default function ChatPage() {
           </div>
         ))}
 
-        {/* Typing indicator */}
         {isTyping && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex justify-start mb-2">
             <div className="w-7 h-7 rounded-full bg-gradient-to-br from-purple-500 to-cyan-500 flex items-center justify-center text-white text-xs font-bold mr-2 overflow-hidden">
-              {contact?.avatar
-                ? <img src={contact.avatar} alt="" className="w-full h-full object-cover" />
-                : contact?.name?.[0]?.toUpperCase()}
+              {contact?.avatar ? <img src={contact.avatar} alt="" className="w-full h-full object-cover" /> : contact?.name?.[0]?.toUpperCase()}
             </div>
             <div className="px-4 py-3 bg-[#1e293b] rounded-2xl rounded-bl-none border border-white/8 flex gap-1.5 items-center">
               {[0,1,2].map(i => <div key={i} className="typing-dot" style={{ animationDelay: i * 0.2 + "s" }} />)}
@@ -402,10 +477,7 @@ export default function ChatPage() {
             className="px-4 py-3 glass border-t border-white/5">
             <div className="flex flex-wrap gap-2">
               {QUICK_EMOJIS.map(emoji => (
-                <button key={emoji} onClick={() => setInput(p => p + emoji)}
-                  className="text-2xl hover:scale-125 transition">
-                  {emoji}
-                </button>
+                <button key={emoji} onClick={() => setInput(p => p + emoji)} className="text-2xl hover:scale-125 transition">{emoji}</button>
               ))}
             </div>
           </motion.div>
@@ -441,38 +513,118 @@ export default function ChatPage() {
         <button
           onClick={(e) => { e.stopPropagation(); setShowAttach(p => !p); setShowEmoji(false); }}
           className={"w-10 h-10 rounded-xl flex items-center justify-center transition flex-shrink-0 mb-0.5 " + (showAttach ? "bg-purple-600 text-white" : "glass text-slate-400 hover:text-purple-400")}
-        >
-          📎
-        </button>
+        >📎</button>
         <div className="flex-1 flex items-end bg-white/5 border border-white/10 rounded-2xl overflow-hidden focus-within:border-purple-500/50 transition">
           <textarea
-            ref={inputRef}
-            value={input}
+            ref={inputRef} value={input}
             onChange={e => handleTyping(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={uploading ? "Uploading..." : "Type a message..."}
-            disabled={uploading}
-            rows={1}
+            disabled={uploading} rows={1}
             className="flex-1 px-4 py-3 bg-transparent text-white text-sm placeholder-slate-500 focus:outline-none resize-none max-h-32"
             style={{ lineHeight: "1.5" }}
           />
           <button
             onClick={(e) => { e.stopPropagation(); setShowEmoji(p => !p); setShowAttach(false); }}
             className={"p-3 transition flex-shrink-0 " + (showEmoji ? "text-yellow-400" : "text-slate-400 hover:text-yellow-400")}
-          >
-            😊
-          </button>
+          >😊</button>
         </div>
-        <motion.button
-          whileTap={{ scale: 0.9 }}
-          onClick={() => sendMessage()}
-          disabled={uploading}
-          className="w-10 h-10 bg-gradient-to-br from-purple-600 to-purple-700 rounded-2xl flex items-center justify-center text-white flex-shrink-0 shadow-lg shadow-purple-500/30 hover:from-purple-500 transition disabled:opacity-60"
-        >
+        <motion.button whileTap={{ scale: 0.9 }} onClick={() => sendMessage()} disabled={uploading}
+          className="w-10 h-10 bg-gradient-to-br from-purple-600 to-purple-700 rounded-2xl flex items-center justify-center text-white flex-shrink-0 shadow-lg shadow-purple-500/30 hover:from-purple-500 transition disabled:opacity-60">
           {uploading ? "⏳" : "➤"}
         </motion.button>
         <input ref={fileRef} type="file" className="hidden" onChange={handleFileUpload} />
       </div>
+
+      {/* ── CALL MODAL ── */}
+      <AnimatePresence>
+        {showCallModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center"
+            style={{ background: showCallModal === "video" ? "linear-gradient(135deg, #0f0e17, #1e1b4b)" : "linear-gradient(135deg, #0f0e17, #16213e)" }}
+          >
+            {/* Video background placeholder */}
+            {showCallModal === "video" && callActive && (
+              <div className="absolute inset-0 bg-gradient-to-br from-purple-900/30 to-cyan-900/20 flex items-center justify-center">
+                <div className="text-9xl opacity-10">📹</div>
+              </div>
+            )}
+
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="relative z-10 text-center px-8"
+            >
+              {/* Contact Avatar */}
+              <div className={"mx-auto mb-6 rounded-full overflow-hidden flex items-center justify-center text-white font-bold bg-gradient-to-br from-purple-500 to-cyan-500 " + (callActive ? "w-32 h-32 text-5xl" : "w-28 h-28 text-4xl")}>
+                {contact?.avatar
+                  ? <img src={contact.avatar} alt="" className="w-full h-full object-cover" />
+                  : contact?.name?.[0]?.toUpperCase()}
+              </div>
+
+              <h2 className="text-white text-2xl font-bold mb-2">{contact?.name}</h2>
+
+              {/* Call Status */}
+              {!callActive ? (
+                <p className="text-slate-400 animate-pulse mb-2">
+                  {showCallModal === "voice" ? "📞 Calling..." : "📹 Video calling..."}
+                </p>
+              ) : (
+                <p className="text-green-400 font-mono text-lg mb-2">{formatCallTime(callDuration)}</p>
+              )}
+
+              <p className="text-slate-500 text-sm mb-10">
+                {callActive ? "Connected" : "Waiting for answer..."}
+              </p>
+
+              {/* Call Controls */}
+              <div className="flex justify-center gap-6">
+                {/* Mute button */}
+                <div className="flex flex-col items-center gap-2">
+                  <button
+                    onClick={() => toast.success("Microphone toggled")}
+                    className="w-14 h-14 glass rounded-full flex items-center justify-center text-2xl hover:bg-white/10 transition border border-white/10"
+                  >🎤</button>
+                  <span className="text-slate-500 text-xs">Mute</span>
+                </div>
+
+                {/* End Call button */}
+                <div className="flex flex-col items-center gap-2">
+                  <button
+                    onClick={endCall}
+                    className="w-16 h-16 bg-red-500 rounded-full flex items-center justify-center text-2xl hover:bg-red-600 transition shadow-lg shadow-red-500/40"
+                  >📵</button>
+                  <span className="text-slate-400 text-xs">End</span>
+                </div>
+
+                {/* Speaker / Camera button */}
+                <div className="flex flex-col items-center gap-2">
+                  <button
+                    onClick={() => toast.success(showCallModal === "video" ? "Camera toggled" : "Speaker toggled")}
+                    className="w-14 h-14 glass rounded-full flex items-center justify-center text-2xl hover:bg-white/10 transition border border-white/10"
+                  >{showCallModal === "video" ? "📷" : "🔊"}</button>
+                  <span className="text-slate-500 text-xs">{showCallModal === "video" ? "Camera" : "Speaker"}</span>
+                </div>
+              </div>
+            </motion.div>
+
+            {/* Small self video preview for video call */}
+            {showCallModal === "video" && (
+              <div className="absolute bottom-8 right-8 w-28 h-40 bg-[#16213e] rounded-2xl border border-white/10 flex items-center justify-center overflow-hidden shadow-xl">
+                <div className="text-center">
+                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-600 to-purple-800 flex items-center justify-center text-white font-bold mx-auto mb-1 overflow-hidden">
+                    {user?.avatar ? <img src={user.avatar} alt="" className="w-full h-full object-cover" /> : user?.name?.[0]?.toUpperCase()}
+                  </div>
+                  <p className="text-slate-500 text-xs">You</p>
+                </div>
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
