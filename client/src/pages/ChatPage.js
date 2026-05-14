@@ -43,6 +43,14 @@ export default function ChatPage() {
 
   const scrollToBottom = () => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
 
+  // Helper to get sender ID safely
+  const getSenderId = (msg) => {
+    if (!msg.sender) return "";
+    if (typeof msg.sender === "string") return msg.sender;
+    if (typeof msg.sender === "object") return msg.sender._id || msg.sender.id || "";
+    return "";
+  };
+
   useEffect(() => {
     setLoading(true);
     Promise.all([
@@ -58,17 +66,30 @@ export default function ChatPage() {
 
   useEffect(() => {
     const offMsg = on("receive_message", (msg) => {
-      if ((msg.sender._id === userId || msg.sender === userId) ||
-        (msg.receiver === user._id || msg.receiver?._id === user._id)) {
-        setMessages(p => [...p, msg]);
+      const senderId = getSenderId(msg);
+      if (senderId === userId || senderId === user._id ||
+        msg.receiver === user._id || msg.receiver?._id === user._id) {
+        setMessages(p => {
+          const exists = p.find(m => m._id === msg._id || m.tempId === msg.tempId);
+          if (exists) return p.map(m => (m.tempId === msg.tempId ? msg : m));
+          return [...p, msg];
+        });
         setTimeout(scrollToBottom, 50);
-        emit("seen", { messageId: msg._id, senderId: msg.sender._id || msg.sender });
+        if (senderId !== user._id) {
+          emit("seen", { messageId: msg._id, senderId });
+        }
       }
     });
-    const offTyping = on("typing", ({ userId: tid }) => { if (tid === userId) setIsTyping(true); });
-    const offStop = on("stop_typing", ({ userId: tid }) => { if (tid === userId) setIsTyping(false); });
+    const offTyping = on("typing", ({ userId: tid }) => {
+      if (tid === userId) setIsTyping(true);
+    });
+    const offStop = on("stop_typing", ({ userId: tid }) => {
+      if (tid === userId) setIsTyping(false);
+    });
     const offSeen = on("message_seen", ({ messageId }) => {
-      setMessages(p => p.map(m => m._id === messageId ? { ...m, seenBy: [...(m.seenBy || []), userId] } : m));
+      setMessages(p => p.map(m =>
+        m._id === messageId ? { ...m, seenBy: [...(m.seenBy || []), userId] } : m
+      ));
     });
     return () => { offMsg(); offTyping(); offStop(); offSeen(); };
   }, [userId, user._id, emit, on]);
@@ -123,7 +144,9 @@ export default function ChatPage() {
   const deleteMessage = async (msgId) => {
     try {
       await api.delete("/messages/" + msgId);
-      setMessages(p => p.map(m => m._id === msgId ? { ...m, isDeleted: true, content: "This message was deleted" } : m));
+      setMessages(p => p.map(m =>
+        m._id === msgId ? { ...m, isDeleted: true, content: "This message was deleted" } : m
+      ));
       setSelectedMsg(null);
     } catch(e) {}
   };
@@ -150,17 +173,20 @@ export default function ChatPage() {
       {/* HEADER */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-white/5 bg-[#16213e]/80 backdrop-blur">
         <button onClick={() => navigate("/home")} className="text-slate-400 hover:text-white transition text-xl w-8">←</button>
-        <div className="relative cursor-pointer" onClick={() => navigate("/profile")}>
+        <div className="relative cursor-pointer">
           <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-cyan-500 flex items-center justify-center text-white font-bold overflow-hidden">
-            {contact?.avatar ? <img src={contact.avatar} alt="" className="w-full h-full object-cover" /> : contact?.name?.[0]?.toUpperCase()}
+            {contact?.avatar
+              ? <img src={contact.avatar} alt="" className="w-full h-full object-cover" />
+              : contact?.name?.[0]?.toUpperCase()}
           </div>
           {isOnline && <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-green-400 rounded-full border-2 border-[#16213e]" />}
         </div>
         <div className="flex-1">
           <p className="text-white font-semibold text-sm">{contact?.name || "..."}</p>
           <p className="text-xs text-slate-500">
-            {isTyping ? <span className="text-purple-400 animate-pulse">typing...</span> :
-             isOnline ? <span className="text-green-400">Online</span> : "Offline"}
+            {isTyping
+              ? <span className="text-purple-400 animate-pulse">typing...</span>
+              : isOnline ? <span className="text-green-400">Online</span> : "Offline"}
           </p>
         </div>
         <div className="flex gap-2">
@@ -188,8 +214,10 @@ export default function ChatPage() {
               <span className="px-3 py-1 glass rounded-full text-xs text-slate-500">{date}</span>
             </div>
             {msgs.map((msg) => {
-              const isMine = (msg.sender._id || msg.sender) === user._id;
+              const senderId = getSenderId(msg);
+              const isMine = senderId === user._id || senderId === user.id;
               const isDeleted = msg.isDeleted;
+
               return (
                 <motion.div
                   key={msg._id}
@@ -197,10 +225,12 @@ export default function ChatPage() {
                   animate={{ opacity: 1, y: 0 }}
                   className={"flex mb-2 " + (isMine ? "justify-end" : "justify-start")}
                 >
-                  {/* Avatar for receiver */}
+                  {/* Avatar for received messages */}
                   {!isMine && (
-                    <div className="w-7 h-7 rounded-full bg-gradient-to-br from-purple-500 to-cyan-500 flex items-center justify-center text-white text-xs font-bold mr-2 flex-shrink-0 mt-1">
-                      {contact?.name?.[0]?.toUpperCase()}
+                    <div className="w-7 h-7 rounded-full bg-gradient-to-br from-purple-500 to-cyan-500 flex items-center justify-center text-white text-xs font-bold mr-2 flex-shrink-0 mt-1 overflow-hidden">
+                      {contact?.avatar
+                        ? <img src={contact.avatar} alt="" className="w-full h-full object-cover" />
+                        : contact?.name?.[0]?.toUpperCase()}
                     </div>
                   )}
 
@@ -218,11 +248,10 @@ export default function ChatPage() {
                       onClick={(e) => { e.stopPropagation(); setSelectedMsg(selectedMsg === msg._id ? null : msg._id); }}
                       className={"px-4 py-2.5 rounded-2xl text-sm leading-relaxed cursor-pointer " + (
                         isMine
-                          ? "bg-gradient-to-br from-purple-600 to-purple-700 text-white rounded-br-sm"
-                          : "bg-white/8 text-slate-200 rounded-bl-sm border border-white/5"
+                          ? "bg-gradient-to-br from-purple-600 to-purple-700 text-white rounded-br-none"
+                          : "bg-[#1e293b] text-slate-200 rounded-bl-none border border-white/8"
                       )}
                     >
-                      {/* Message content based on type */}
                       {isDeleted ? (
                         <em className="text-slate-400 text-xs">🚫 This message was deleted</em>
                       ) : msg.type === "image" ? (
@@ -239,24 +268,28 @@ export default function ChatPage() {
                         <p className="whitespace-pre-wrap break-words">{msg.content}</p>
                       )}
 
-                      {/* Time and status */}
+                      {/* Time and ticks */}
                       <div className={"flex items-center gap-1 mt-1 " + (isMine ? "justify-end" : "justify-start")}>
                         <span className="text-xs opacity-50">{formatTime(msg.createdAt)}</span>
                         {isMine && (
-                          <span className={"text-xs " + (msg.seenBy?.length > 0 ? "text-blue-300" : "opacity-50")}>
+                          <span className={"text-xs font-bold " + (msg.seenBy?.length > 0 ? "text-blue-400" : "text-white/50")}>
                             {msg.isSending ? "⏳" : msg.seenBy?.length > 0 ? "✓✓" : "✓"}
                           </span>
                         )}
                       </div>
                     </div>
 
-                    {/* Reactions display */}
+                    {/* Reactions */}
                     {msg.reactions?.length > 0 && (
                       <div className={"flex gap-1 mt-1 flex-wrap " + (isMine ? "justify-end" : "justify-start")}>
                         {Object.entries(
-                          msg.reactions.reduce((acc, r) => { acc[r.emoji] = (acc[r.emoji] || 0) + 1; return acc; }, {})
+                          msg.reactions.reduce((acc, r) => {
+                            acc[r.emoji] = (acc[r.emoji] || 0) + 1;
+                            return acc;
+                          }, {})
                         ).map(([emoji, count]) => (
-                          <span key={emoji} className="text-xs glass px-2 py-0.5 rounded-full cursor-pointer hover:bg-white/10"
+                          <span key={emoji}
+                            className="text-xs glass px-2 py-0.5 rounded-full cursor-pointer hover:bg-white/10"
                             onClick={() => reactToMessage(msg._id, emoji)}>
                             {emoji} {count > 1 ? count : ""}
                           </span>
@@ -264,19 +297,22 @@ export default function ChatPage() {
                       </div>
                     )}
 
-                    {/* Action buttons on hover */}
+                    {/* Hover actions */}
                     {!isDeleted && (
                       <div className={"absolute top-0 flex gap-1 opacity-0 group-hover:opacity-100 transition " + (isMine ? "-left-20" : "-right-20")}>
-                        <button onClick={(e) => { e.stopPropagation(); setShowReaction(showReaction === msg._id ? null : msg._id); }}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setShowReaction(showReaction === msg._id ? null : msg._id); }}
                           className="w-7 h-7 glass rounded-full flex items-center justify-center text-xs hover:bg-white/10">
                           😊
                         </button>
-                        <button onClick={(e) => { e.stopPropagation(); setReplyTo(msg); inputRef.current?.focus(); }}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setReplyTo(msg); inputRef.current?.focus(); }}
                           className="w-7 h-7 glass rounded-full flex items-center justify-center text-xs hover:bg-white/10">
                           ↩
                         </button>
                         {isMine && (
-                          <button onClick={(e) => { e.stopPropagation(); deleteMessage(msg._id); }}
+                          <button
+                            onClick={(e) => { e.stopPropagation(); deleteMessage(msg._id); }}
                             className="w-7 h-7 glass rounded-full flex items-center justify-center text-xs hover:bg-red-500/20 text-red-400">
                             🗑
                           </button>
@@ -301,6 +337,15 @@ export default function ChatPage() {
                       </motion.div>
                     )}
                   </div>
+
+                  {/* Avatar for sent messages */}
+                  {isMine && (
+                    <div className="w-7 h-7 rounded-full bg-gradient-to-br from-purple-600 to-purple-800 flex items-center justify-center text-white text-xs font-bold ml-2 flex-shrink-0 mt-1 overflow-hidden">
+                      {user?.avatar
+                        ? <img src={user.avatar} alt="" className="w-full h-full object-cover" />
+                        : user?.name?.[0]?.toUpperCase()}
+                    </div>
+                  )}
                 </motion.div>
               );
             })}
@@ -310,10 +355,12 @@ export default function ChatPage() {
         {/* Typing indicator */}
         {isTyping && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex justify-start mb-2">
-            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-purple-500 to-cyan-500 flex items-center justify-center text-white text-xs font-bold mr-2">
-              {contact?.name?.[0]?.toUpperCase()}
+            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-purple-500 to-cyan-500 flex items-center justify-center text-white text-xs font-bold mr-2 overflow-hidden">
+              {contact?.avatar
+                ? <img src={contact.avatar} alt="" className="w-full h-full object-cover" />
+                : contact?.name?.[0]?.toUpperCase()}
             </div>
-            <div className="px-4 py-3 bg-white/8 rounded-2xl rounded-bl-sm border border-white/5 flex gap-1.5 items-center">
+            <div className="px-4 py-3 bg-[#1e293b] rounded-2xl rounded-bl-none border border-white/8 flex gap-1.5 items-center">
               {[0,1,2].map(i => <div key={i} className="typing-dot" style={{ animationDelay: i * 0.2 + "s" }} />)}
             </div>
           </motion.div>
@@ -391,15 +438,12 @@ export default function ChatPage() {
 
       {/* INPUT BAR */}
       <div className="flex items-end gap-2 px-4 py-3 border-t border-white/5 bg-[#16213e]/80 backdrop-blur">
-        {/* Attachment button */}
         <button
           onClick={(e) => { e.stopPropagation(); setShowAttach(p => !p); setShowEmoji(false); }}
           className={"w-10 h-10 rounded-xl flex items-center justify-center transition flex-shrink-0 mb-0.5 " + (showAttach ? "bg-purple-600 text-white" : "glass text-slate-400 hover:text-purple-400")}
         >
           📎
         </button>
-
-        {/* Text input */}
         <div className="flex-1 flex items-end bg-white/5 border border-white/10 rounded-2xl overflow-hidden focus-within:border-purple-500/50 transition">
           <textarea
             ref={inputRef}
@@ -419,8 +463,6 @@ export default function ChatPage() {
             😊
           </button>
         </div>
-
-        {/* Send button */}
         <motion.button
           whileTap={{ scale: 0.9 }}
           onClick={() => sendMessage()}
@@ -429,8 +471,6 @@ export default function ChatPage() {
         >
           {uploading ? "⏳" : "➤"}
         </motion.button>
-
-        {/* Hidden file input */}
         <input ref={fileRef} type="file" className="hidden" onChange={handleFileUpload} />
       </div>
     </div>
