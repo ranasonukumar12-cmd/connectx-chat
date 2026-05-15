@@ -15,6 +15,7 @@ import SettingsPage from "./pages/SettingsPage";
 import AIAssistantPage from "./pages/AIAssistantPage";
 import AdminPage from "./pages/AdminPage";
 import GroupPage from "./pages/GroupPage";
+import StoriesPage from "./pages/StoriesPage";
 
 const Protected = ({ children }) => {
   const { user, loading } = useAuth();
@@ -57,6 +58,7 @@ export default function App() {
               <Route path="/home" element={<Protected><HomePage /></Protected>} />
               <Route path="/chat/:userId" element={<Protected><ChatPage /></Protected>} />
               <Route path="/group/:groupId" element={<Protected><GroupPage /></Protected>} />
+              <Route path="/stories" element={<Protected><StoriesPage /></Protected>} />
               <Route path="/profile" element={<Protected><ProfilePage /></Protected>} />
               <Route path="/settings" element={<Protected><SettingsPage /></Protected>} />
               <Route path="/ai" element={<Protected><AIAssistantPage /></Protected>} />

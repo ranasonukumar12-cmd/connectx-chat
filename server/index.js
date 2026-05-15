@@ -1,10 +1,3 @@
-/**
- * ConnectX Chat - Main Server Entry Point
- * 
- * This file initializes the Express server, connects to MongoDB,
- * sets up Socket.IO for real-time features, and loads all middleware.
- */
-
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -28,13 +21,11 @@ const groupRoutes = require('./routes/group.routes');
 const uploadRoutes = require('./routes/upload.routes');
 const aiRoutes = require('./routes/ai.routes');
 const notificationRoutes = require('./routes/notification.routes');
+const storyRoutes = require('./routes/story.routes');
 
 const app = express();
 const server = http.createServer(app);
 
-// ═══════════════════════════════════════════════
-// SOCKET.IO SETUP
-// ═══════════════════════════════════════════════
 const io = new Server(server, {
   cors: {
     origin: process.env.CLIENT_URL || 'http://localhost:3000',
@@ -45,44 +36,28 @@ const io = new Server(server, {
   pingInterval: 25000,
 });
 
-// Initialize Socket Events
 initSocket(io);
 
-// ═══════════════════════════════════════════════
-// MIDDLEWARE SETUP
-// ═══════════════════════════════════════════════
-
-// Security Headers
 app.use(helmet());
 
-// CORS
 app.use(cors({
   origin: process.env.CLIENT_URL || 'http://localhost:3000',
   credentials: true,
 }));
 
-// Body Parser
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
-// Compression
 app.use(compression());
-
-// MongoDB Sanitization (prevent NoSQL injection)
 app.use(mongoSanitize());
-
-// Request Logger
 app.use(morgan('combined', { stream: { write: msg => logger.info(msg.trim()) } }));
 
-// Rate Limiting - prevents brute force / spam
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 200, // max 200 requests per window
+  windowMs: 15 * 60 * 1000,
+  max: 200,
   message: { error: 'Too many requests, please try again later.' },
 });
 app.use('/api/', limiter);
 
-// Stricter rate limit for auth routes
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
@@ -90,15 +65,11 @@ const authLimiter = rateLimit({
 });
 app.use('/api/auth/', authLimiter);
 
-// Share io with routes via req object
 app.use((req, res, next) => {
   req.io = io;
   next();
 });
 
-// ═══════════════════════════════════════════════
-// ROUTES
-// ═══════════════════════════════════════════════
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', message: 'ConnectX Server Running 🚀', timestamp: new Date() });
 });
@@ -110,13 +81,12 @@ app.use('/api/groups', groupRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/stories', storyRoutes);
 
-// 404 Handler
 app.use('*', (req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
-// Global Error Handler
 app.use((err, req, res, next) => {
   logger.error(`Error: ${err.message}`);
   res.status(err.status || 500).json({
@@ -125,9 +95,6 @@ app.use((err, req, res, next) => {
   });
 });
 
-// ═══════════════════════════════════════════════
-// DATABASE CONNECTION & SERVER START
-// ═══════════════════════════════════════════════
 const PORT = process.env.PORT || 5000;
 
 mongoose.connect(process.env.MONGODB_URI)

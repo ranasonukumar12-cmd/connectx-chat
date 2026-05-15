@@ -196,12 +196,18 @@ export default function HomePage() {
             </>
           )}
 
-          {tab === "Stories" && (
-            <div className="text-center py-12 px-4">
-              <div className="text-5xl mb-3">⚡</div>
-              <p className="text-slate-500 text-sm">Stories coming soon!</p>
-            </div>
-          )}
+        {tab === "Stories" && (
+  <div className="text-center py-12 px-4">
+    <div className="text-5xl mb-3">⚡</div>
+    <p className="text-slate-500 text-sm font-medium">Stories</p>
+    <p className="text-slate-600 text-xs mt-1 mb-6">Share moments with your contacts</p>
+    <button
+      onClick={() => navigate("/stories")}
+      className="px-6 py-3 bg-purple-600 text-white rounded-xl hover:bg-purple-700 transition text-sm font-semibold">
+      View Stories
+    </button>
+  </div>
+)}
 
           {tab === "Calls" && (
             <div className="text-center py-12 px-4">
